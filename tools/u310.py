@@ -63,6 +63,8 @@ def main(argv=None):
                 print('Telefono non installato. Esegui: u310.py install <cartella firmware>')
                 return 1
             print('Telefono installato:', provision.PHONE)
+            if provision.state_outdated():
+                print('Attenzione: la flash salvata e\' di una versione precedente; esegui `u310.py reset` (o avvia la finestra) per ripristinarla.')
             info = provision.DATA / 'install.json'
             if info.exists():
                 print(json.dumps(json.loads(info.read_text()), indent=2))

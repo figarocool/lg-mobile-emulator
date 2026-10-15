@@ -25,8 +25,25 @@ TOOLS = ROOT / 'tools'
 DATA = ROOT / 'data'
 PHONE = DATA / 'phone.zip'
 FACTORY = DATA / 'factory.zip'
+STATE_VERSION = 2  # bumped when an emulator change makes a flash saved by an older version misbehave (v2: simulated network and SIM)
+VERSION_FILE = DATA / 'state_version.json'
 BOOT_STEPS = 250_000_000  # instructions: the file system task is ready (checked by the next step)
 sys.path.insert(0, str(TOOLS))
+
+
+def state_outdated():
+    """True when the saved phone was written by an older emulator whose stored SIM/network state no longer fits."""
+    if not PHONE.exists():
+        return False
+    try:
+        return json.loads(VERSION_FILE.read_text()).get('version', 0) < STATE_VERSION
+    except (OSError, ValueError):
+        return True
+
+
+def mark_current():
+    DATA.mkdir(exist_ok=True)
+    VERSION_FILE.write_text(json.dumps({'version': STATE_VERSION}) + '\n')
 
 
 def installed():
@@ -101,12 +118,13 @@ def install(source, progress=print):
         PHONE.with_suffix('.tmp').replace(PHONE)
         shutil.copyfile(PHONE, FACTORY)
         (DATA / 'install.json').write_text(json.dumps({'firmware': {r: p.name for r, p in found.items()}}, indent=2) + '\n')
+        mark_current()
     progress('Installazione completata. Avvia il telefono con: python3 tools/u310.py run')
 
 
 def uninstall(progress=print, keep_firmware=False):
     """Delete the installed phone: flash, copies of the firmware and extracted resources (SIM and microSD files stay)."""
-    for path in (PHONE, FACTORY, PHONE.with_suffix('.bak'), DATA / 'install.json'):
+    for path in (PHONE, FACTORY, PHONE.with_suffix('.bak'), DATA / 'install.json', VERSION_FILE):
         path.unlink(missing_ok=True)
     targets = [ROOT / 'extracted'] + ([] if keep_firmware else [ROOT / 'firmware'])
     for folder in targets:
@@ -124,6 +142,7 @@ def reset(progress=print):
     if not FACTORY.exists():
         raise RuntimeError('Nessuna copia di fabbrica: esegui prima l\'installazione')
     shutil.copyfile(FACTORY, PHONE)
+    mark_current()
     progress('Telefono riportato allo stato di fabbrica.')
 
 

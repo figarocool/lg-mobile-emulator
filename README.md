@@ -35,13 +35,15 @@ procurarsi i propri file originali.
 - **microSD**: immagini FAT con tabella delle partizioni, gestore file nella finestra; il controller MMC/SD del
   telefono è emulato: il driver originale monta la scheda, legge e **scrive** (il telefono crea le cartelle Immagini/Video/Suoni e
   "Aggiungi nuovo" crea cartelle reali nell'immagine).
+- **Fotocamera**: sensore OV9655 su I2C emulato; il firmware lo rileva, lo inizializza e avvia l'anteprima (fotogrammi ancora da fare).
 - **Finestra GTK** con menu per installare/reinstallare/disinstallare, SIM, microSD e impostazioni.
 
 ## Cosa manca
 
 - Lettura di file multimediali dalla microSD e fotocamera che salva foto (da verificare).
 - Suono di accensione e suonerie in formato SMAF (`.mmf`).
-- Chip Bluetooth (controller HCI e audio), fotocamere (anteriore e posteriore), audio fedele via DSP.
+- Chip Bluetooth (il controller gira sul QDSP, protocollo da ricavare), anteprima e scatto della fotocamera (il sensore OV9655 e il suo
+  bus I2C sono emulati e il driver originale parte; manca il DSP della fotocamera), audio fedele via DSP.
 - Modem GSM/WCDMA reale (oggi sostituito da un modello a livello NAS).
 
 I dettagli tecnici e il diario del reverse engineering sono in [`docs/BOOT_PROGRESS.md`](docs/BOOT_PROGRESS.md)

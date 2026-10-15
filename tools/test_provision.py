@@ -88,3 +88,22 @@ class UninstallTests(unittest.TestCase):
                 self.assertTrue(messages)
             finally:
                 provision.ROOT, provision.DATA, provision.PHONE, provision.FACTORY = saved
+
+
+class StateVersionTests(unittest.TestCase):
+    def test_flash_from_an_older_emulator_is_reported_outdated(self):
+        import provision
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            saved = provision.PHONE, provision.VERSION_FILE, provision.DATA
+            try:
+                provision.DATA, provision.PHONE, provision.VERSION_FILE = folder, folder / 'phone.zip', folder / 'state_version.json'
+                self.assertFalse(provision.state_outdated())              # nothing installed
+                provision.PHONE.write_bytes(b'x')
+                self.assertTrue(provision.state_outdated())               # no version file: written by an older emulator
+                provision.mark_current()
+                self.assertFalse(provision.state_outdated())
+                provision.VERSION_FILE.write_text(json.dumps({'version': provision.STATE_VERSION - 1}))
+                self.assertTrue(provision.state_outdated())
+            finally:
+                provision.PHONE, provision.VERSION_FILE, provision.DATA = saved

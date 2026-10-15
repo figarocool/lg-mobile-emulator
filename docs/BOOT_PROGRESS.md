@@ -608,3 +608,28 @@ Obiettivo: il telefono mostra "3G", le tacche e il nome operatore ("H3G") come q
 - Dopo la correzione il telefono, entrando in "Memoria esterna", crea da solo `Images`, `Videos`, `Sounds`, `Others` (visibili con `mdir`),
   e "Aggiungi nuovo" crea cartelle reali nell'immagine.
 - L'orologio del telefono (data dei file) parte dal 2006-01-01.
+
+## Fotocamera (stato)
+
+- Il sensore e' sul bus I2C 0 all'indirizzo 7 bit 0x30 (OV9655: PID 0x96, VER 0x57; il firmware contiene anche i driver OV9652 e Micron MT9M111).
+  Il servizio I2C del firmware (`i2c.c`) espone la lettura a `0x144355e` e la scrittura a `0x14436c0` (veneer `0xd9ab00` / `0xd9aaf4`) con un
+  record: +0 bus, +1 indirizzo (8 bit), +2 opzioni (bit1/bit2: registro a 16/8 bit), +4 buffer, +8 registro, +0xa numero byte, +0xc byte trasferiti.
+  `tools/i2c_gpio.py` completa le transazioni a quel livello con un modello di sensore (registri ID e scritture). Senza sensore il firmware
+  scriveva "I2C read failed, reg 0xa" e "oem_camera_start(): no sensor".
+- Con il sensore il driver originale esegue la tabella di inizializzazione (circa 200 scritture), imposta 1280x960 e passa a "preview"
+  (`CAMERA_FUNC_START_PREVIEW / CAMERA_RSP_CB_SUCCESS`), carica l'immagine DSP 0x15 (`CAMQDSP_DWNLOAD_DONE`, "IGG enabled").
+- Manca il DSP della fotocamera: dopo il caricamento (microcodice scritto a 0x58200000, dati a 0x58400000) il codice ARM sonda parole di
+  stato del DSP (tabella di puntatori a 0x17bd848 + 0x280..0x380: 0x58000002 = registro comandi libero se vale 0xffff, 0x58401a18/1a30/19f4/1a1c..
+  = eventi) e, non ricevendo risposta, termina con "Cannot load DSP". Servono: comandi (ids 0x200/0x201/0x300/0x601/0x602/0x800-0x805/0x900...)
+  e risposte del DSP, e i fotogrammi del preview (layer LG `lg_oem_camera_msm6250.c`: `oem_camera_enable_preview`, `oem_camera_blt_ext`).
+
+## Bluetooth (stato)
+
+- Il controller Bluetooth non e' un chip esterno con UART: il baseband e' dentro l'MSM6250 e gira sul QDSP (immagine BT, pagine comando
+  `BT_QDSP_PAGE_CMD`, `bt_bb_okts_qdsp_cmd`, SBI verso l'RFU); l'host/controller HCI (`bt_hc`) e i profili (AG, AVCT, GOEP, SD, RM) sono in codice ARM.
+  Emularlo richiede il protocollo del QDSP Bluetooth (non ancora ricavato).
+
+## Stato salvato e versioni
+
+- `provision.STATE_VERSION` (file `data/state_version.json`): una flash salvata da una versione precedente (con cache SIM/rete obsolete) non si
+  registra ("Limited service req", PLMN richiesto 0xff). La finestra propone il ripristino di fabbrica; `./u310 info` avvisa.

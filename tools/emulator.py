@@ -149,6 +149,11 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
         from gpio_inputs import FlipSensor
         flip_sensor = FlipSensor(uc, flip)
         from gpio_inputs import HeadsetJack
+        from i2c_gpio import I2cService, SccbSensor
+        camera_sensor = SccbSensor()
+        camera_bus = I2cService(uc, {(0, 0x30): camera_sensor})      # camera sensor (OV9655-style) on I2C bus 0
+        state['camera_i2c'] = camera_bus
+        camera_bus.sensor = camera_sensor
         headset_jack = HeadsetJack(uc, os.environ.get('U310_HEADSET') == '1', headset_file)
     if keypad:
         config['keypad'] = True
@@ -470,6 +475,9 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
         entry_watch.finalize(state)
         task_coverage.finalize(state)
         msg_watch.finalize(state)
+        if 'camera_i2c' in state:
+            bus = state['camera_i2c']
+            state['camera_i2c'] = dict(bus.report(), sensor_writes=bus.sensor.writes[:80])
         if 'netsim' in state:
             state['netsim'] = state['netsim'].report()
         if 'nv_override' in state:

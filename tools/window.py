@@ -539,6 +539,14 @@ class EmulatorWindow(Gtk.Window):
     def start(self):
         if not self.resume and not provision.installed():
             return self.install_wizard()
+        if not self.resume and provision.state_outdated():
+            if self.confirm('Il telefono salvato è di una versione precedente',
+                            'La rete e la SIM simulate sono cambiate: con la flash salvata il telefono non si registra '
+                            '(niente tacche né operatore). Ripristinare lo stato di fabbrica? '
+                            'Impostazioni, contatti e messaggi del telefono emulato andranno persi.'):
+                provision.reset(lambda text: self.status.set_text(text))
+            else:
+                provision.mark_current()
         live = self.work / 'live'
         live.mkdir(exist_ok=True)
         self.signal_file.write_text(str(self.signal_levels.get(self.settings.get('signal'), 65)))
