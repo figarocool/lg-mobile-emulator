@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+firmware/
+extracted/
+data/
+analysis/
+references/
+*.img
+*.zip
+*.bin
+*.BIN
+*.nvm
+*.nv2

@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Launcher: ./u310 install <cartella firmware> | run | reset | info"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'tools'))
+import u310  # noqa: E402
+
+sys.exit(u310.main())
