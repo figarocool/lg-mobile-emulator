@@ -30,15 +30,17 @@ procurarsi i propri file originali.
 - **IMEI e indirizzo Bluetooth** impostabili; il firmware li legge come dalla NV reale.
 - **Audio**: toni dei tasti dal protocollo DSP (comando di generazione toni decifrato) e riproduzione dei file
   multimediali tramite i decoder del PC.
-- **Rete**: livello radio sostituito da un modello (`netsim`) che risponde al NAS: il telefono registra su 222-99.
+- **Rete**: livello radio sostituito da un modello (`netsim`) che risponde al NAS: il telefono si registra su 222-99 (servizio completo),
+  mostra "3G", le tacche (livello regolabile dal menu *Rete*) e il nome operatore "H3G".
 - **microSD**: immagini FAT con tabella delle partizioni, gestore file nella finestra; il controller MMC/SD del
-  telefono è emulato (il driver originale inizializza la scheda e legge MBR/FAT); in rifinitura.
+  telefono è emulato: il driver originale monta la scheda, legge e **scrive** (il telefono crea le cartelle Immagini/Video/Suoni e
+  "Aggiungi nuovo" crea cartelle reali nell'immagine).
 - **Finestra GTK** con menu per installare/reinstallare/disinstallare, SIM, microSD e impostazioni.
 
 ## Cosa manca
 
-- Livello di segnale (tacche) e nome operatore sulla schermata iniziale.
-- Montaggio completo della microSD nel menu del telefono.
+- Lettura di file multimediali dalla microSD e fotocamera che salva foto (da verificare).
+- Suono di accensione e suonerie in formato SMAF (`.mmf`).
 - Chip Bluetooth (controller HCI e audio), fotocamere (anteriore e posteriore), audio fedele via DSP.
 - Modem GSM/WCDMA reale (oggi sostituito da un modello a livello NAS).
 

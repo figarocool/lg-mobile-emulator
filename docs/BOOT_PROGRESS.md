@@ -566,3 +566,45 @@ PIN; poi verificare cosa chiede il firmware dopo la registrazione.
 - **Bluetooth**: il task BT parla con il chip dopo la lettura di NV 447; serve il controller HCI su UART + profili audio.
 - Strumenti nuovi: `msg_func.py`, `msg_users.py` (generalizzato), `msg_region.py`, `net_probe.py`, `exp_plmn.py`, `U310_WATCH_WRITES`,
   `U310_WATCH_ACCESS`, `U310_PC_HITS` (fino a 3000 hit).
+
+
+## Rete, segnale e operatore (risolto)
+
+Obiettivo: il telefono mostra "3G", le tacche e il nome operatore ("H3G") come quello reale. Percorso ricavato dal firmware:
+
+- **Registrazione**: MM interpreta `RRC_SERVICE_CNF` (id 0x67). Le informazioni di dominio CN sono voci da 16 byte da +0x28:
+  `+0` dominio (0 = CS, 1 = PS), `+4` lunghezza (>= 2), `+8` dati. CS: T3212 (0 = nessun aggiornamento periodico) e flag (bit 0 = IMSI attach
+  richiesto); PS: RAC e flag (bit 0 = NMO I). Con la voce CS mancante MM stampa "The CS specific domain information must be atleast 2 bytes in length"
+  e REG ripiega sul GSM (servizio limitato). Con la voce CS corretta e `EF_LOCI` della SIM coerente (stesso LAI/LAC della cella, stato
+  "aggiornato", TMSI valido) MM stampa "Same Lai-LU not required" e il servizio risulta completo: nessun Location Update via aria da simulare.
+- **Messaggi RRC verso MM**: id 0x64 EST_CNF, 0x65 REL_IND, 0x66 SYNC_IND, 0x67 SERVICE_CNF, 0x68 SERVICE_IND, 0x6a PLMN_LIST_CNF, 0x6e OPEN_SESSION_CNF,
+  0x6f CLOSE_SESSION_IND, 0x70 CLOSE_SESSION_CNF, 0x73 MODE_CHANGE_CNF, 0x74 STOP_WCDMA_MODE_CNF (allocatore 0x12e0748 accetta 0x64-0x78).
+- **Segnale**: il report arriva al task CM come elemento sulla coda dei report (0x19c0f4c) con comando 0x29, seguito dal segnale REX 2 al TCB di CM
+  (0x1be9eb8). Il valore e' in `msg+0x18` (RSSI in -dBm; 125 = nessun segnale). CM copia l'RSSI nel record 0x19bd6c8 e invia l'evento RSSI
+  (tipo 1) ai client; PhoneMngr lo riceve come `PDK Post Event 10400`. Le tacche vengono da due misure: RSSI (soglie 91/101/111/115 -> livelli 4..1)
+  e Ec/Io (halfword a `ssinfo+0x20`, valore/2 in dB con soglie 13/13/15/18), vince la peggiore. L'Ec/Io proviene da `0x1e772b0+0x1a`; `netsim`
+  lo deriva dall'RSSI. Livello 0: nessuna tacca. Tacche e icona "3G" compaiono solo con `srv_status == 2` (NmInfo+4).
+- **Nome operatore**: "H3G" viene dal firmware (tabella interna + SPN della SIM) una volta registrato.
+- Impostazione: `--rssi` (default 65), `--signal-file` riletto durante l'esecuzione; il menu "Rete" della finestra scrive il file.
+
+## Ingressi GPIO scoperti
+
+- Bit 5 di `0x8400016c` = auricolare NON inserito (il valore 0 di default faceva comparire l'icona cuffie e il profilo "Auricolare").
+  Modello `HeadsetJack` in `gpio_inputs.py`; la finestra ha "Inserisci/estrai auricolare" (`--headset-file`).
+- Bit 3 di `0x8400016c` = rilevamento microSD.
+
+## Suoni (aggiornamento)
+
+- Anteprima suoneria dal menu Profili d'uso > Modifica > elenco > Play: `SNDAPI_Play_AudioPlayer=<percorso>` con sorgente CMX_SOURCE_EFS;
+  il percorso (es. `/LGAPP/Media/Sounds/Default sounds/Ring1.mid`) e' gia' intercettato da `audio_hle`. I file `.mmf` (SMAF MA-3) non
+  hanno decoder ffmpeg ("MIDI like format ... unsupported").
+- Il suono di accensione ("Power On.aac") non viene richiesto dal firmware nell'avvio emulato (nessuna chiamata AudioPlayer).
+
+## microSD: lettura e scrittura verificate
+
+- La scrittura (CMD24/CMD25) si completa solo con tre bit di stato che il driver `mmc_write_i` attende: bit 6 (0x40) = FIFO pronta a ricevere
+  la parola (ciclo a 0x3680c4), bit 11 e bit 12 (0x1800) = blocco ricevuto e programmato (ciclo a 0x368276). Senza di essi la scheda restava in stato
+  RCV, CMD13 veniva ripetuto 2000 volte e il telefono mostrava "Memoria insufficiente per salvare".
+- Dopo la correzione il telefono, entrando in "Memoria esterna", crea da solo `Images`, `Videos`, `Sounds`, `Others` (visibili con `mdir`),
+  e "Aggiungi nuovo" crea cartelle reali nell'immagine.
+- L'orologio del telefono (data dei file) parte dal 2006-01-01.

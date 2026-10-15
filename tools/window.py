@@ -92,6 +92,9 @@ class EmulatorWindow(Gtk.Window):
         self.work = Path(tempfile.mkdtemp(prefix='u310-'))
         self.keys_file = self.work / 'keys.txt'
         self.keys_file.write_text('')
+        self.signal_file = self.work / 'signal.txt'
+        self.headset_file = self.work / 'headset.txt'
+        self.headset_file.write_text('0')
         self.held, self.power = set(), False
         self.resume, self.flip_open = resume, flip_open
         self.child, self.closed = None, False
@@ -287,6 +290,7 @@ class EmulatorWindow(Gtk.Window):
                           (None, None),
                           ('Ripristino di fabbrica…', self.factory_reset),
                           ('Riavvia il telefono', self.restart_plain),
+                          ('Inserisci/estrai auricolare', self.toggle_headset),
                           (None, None),
                           ('Esci', self.close)])
         menu('SIM', [('Gestisci SIM e numero…', lambda: self.on_settings(None))])
@@ -299,8 +303,21 @@ class EmulatorWindow(Gtk.Window):
                          ('Copia file dal PC nella scheda…', self.sd_copy_in),
                          ('Copia il contenuto della scheda sul PC…', self.sd_copy_out),
                          ('Informazioni sulla scheda', self.sd_info)])
+        self.signal_levels = {'Nessun segnale': 124, 'Debole': 105, 'Medio': 95, 'Buono': 85, 'Ottimo': 65}
+        menu('Rete', [(f'Segnale: {name}', lambda n=name: self.set_signal(n)) for name in self.signal_levels])
         menu('Impostazioni', [('IMEI, Bluetooth, velocità…', lambda: self.on_settings(None))])
         return bar
+
+    def toggle_headset(self):
+        inserted = self.headset_file.read_text().strip() != '1' if self.headset_file.exists() else True
+        self.headset_file.write_text('1' if inserted else '0')
+        self.status.set_text('Auricolare inserito' if inserted else 'Auricolare estratto')
+
+    def set_signal(self, name):
+        self.settings['signal'] = name
+        self.settings_module.save(self.settings)
+        self.signal_file.write_text(str(self.signal_levels[name]))
+        self.status.set_text(f'Segnale simulato: {name}')
 
     def message(self, kind, text, detail=''):
         box = Gtk.MessageDialog(transient_for=self, modal=True, message_type=kind, buttons=Gtk.ButtonsType.OK, text=text)
@@ -524,12 +541,14 @@ class EmulatorWindow(Gtk.Window):
             return self.install_wizard()
         live = self.work / 'live'
         live.mkdir(exist_ok=True)
+        self.signal_file.write_text(str(self.signal_levels.get(self.settings.get('signal'), 65)))
         for name in ('main.ppm', 'sub.ppm'):
             (live / name).unlink(missing_ok=True)
         args = [sys.executable, str(ROOT / 'tools/emulator.py'), '--target', 'amss', '--nand', '--lcd-bus',
                 '--shadow-mmio', '--register-banks', '--timer-irq', '--mmc-clock',
                 '--mdsp-management', '--keypad', '--uim-card', '--fast', '--realtime', '--audio', '--rf-defaults', '--netsim', '--cpu-mhz', str(self.cpu_mhz),
                 '--keys-file', str(self.keys_file), '--live-dir', str(live),
+                '--rssi', str(self.signal_levels.get(self.settings.get('signal'), 65)), '--signal-file', str(self.signal_file), '--headset-file', str(self.headset_file),
                 *(['--resume', str(self.resume)] if self.resume else ['--nand-from-checkpoint', str(NAND_IMAGE)]),
                 '--imei', self.settings['imei'], '--sim', self.settings['sim'],
                 *(['--sd', self.settings['sd_image']] if self.settings.get('sd_image') and Path(self.settings['sd_image']).exists() else []),

@@ -49,7 +49,7 @@ def write_nand_state(path, controller):
 
 def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, lcd=False,
         banks=False, save_checkpoint=None, resume=None, irq=False, mmc=False, block_trace=False,
-        synthetic_ssikyu=False, mdsp_management=False, keypad=False, flip=None, press=(), keys_file=None, live_dir=None, nand_checkpoint=None, uim_card=False, release_keys=False, fast=False, realtime=False, cpu_mhz=None, audio=False, imei=None, bt_addr=None, save_nand=None, save_nand_after=0, rf_defaults=False, netsim=False, debug_setup=None, debug_finish=None):
+        synthetic_ssikyu=False, mdsp_management=False, keypad=False, flip=None, press=(), keys_file=None, live_dir=None, nand_checkpoint=None, uim_card=False, release_keys=False, fast=False, realtime=False, cpu_mhz=None, audio=False, imei=None, bt_addr=None, save_nand=None, save_nand_after=0, rf_defaults=False, netsim=False, debug_setup=None, debug_finish=None, rssi=65, signal_file=None, headset_file=None):
     uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     uc.ctl_set_cpu_model(UC_CPU_ARM_926)
     if target == 'amss':
@@ -148,6 +148,8 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
     if flip is not None:
         from gpio_inputs import FlipSensor
         flip_sensor = FlipSensor(uc, flip)
+        from gpio_inputs import HeadsetJack
+        headset_jack = HeadsetJack(uc, os.environ.get('U310_HEADSET') == '1', headset_file)
     if keypad:
         config['keypad'] = True
 
@@ -319,7 +321,7 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
         netsim_device = None
         if netsim:
             from netsim import Network
-            netsim_device = Network(uc)
+            netsim_device = Network(uc, rssi=rssi, signal_file=signal_file)
             state['netsim'] = netsim_device
         if audio:
             import audio_hle
@@ -348,9 +350,13 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
             raise ValueError('Synthetic SSIKYU requires --nand')
         from ssikyu_fixture import initialize
         state['synthetic_initial_state'] = initialize(controller)
+    if not debug_setup and os.environ.get('U310_SETUP'):
+        import importlib
+        debug_setup = importlib.import_module(os.environ['U310_SETUP']).setup   # diagnostic hook module
     if debug_setup:
         debug_setup(uc, state)
-        start = uc.reg_read(UC_ARM_REG_PC) | (1 if uc.reg_read(UC_ARM_REG_CPSR) & 32 else 0)
+        if resume:
+            start = uc.reg_read(UC_ARM_REG_PC) | (1 if uc.reg_read(UC_ARM_REG_CPSR) & 32 else 0)
     import time
     profile = Counter() if os.environ.get('U310_FAST_PROFILE') else None
     masked_pending, retry_chunks = False, (13, 29, 41, 53, 67, 79, 97)
@@ -549,6 +555,9 @@ if __name__ == '__main__':
     parser.add_argument('--save-nand', type=Path, help='Write the flash contents here when the run ends (also on SIGTERM/SIGINT)')
     parser.add_argument('--save-nand-after', type=int, default=0, help='Only save the flash when at least this many instructions ran (avoids saving a half-booted phone)')
     parser.add_argument('--rf-defaults', action='store_true', help='Serve zero-filled records for the radio calibration NV items a blank NV lacks')
+    parser.add_argument('--rssi', type=int, default=65, help='Simulated signal strength in -dBm (30 best .. 125 none)')
+    parser.add_argument('--signal-file', type=Path, help='File holding the wanted signal strength (-dBm), re-read while running')
+    parser.add_argument('--headset-file', type=Path, help='File holding 1 (earphones plugged in) or 0, re-read while running')
     parser.add_argument('--netsim', action='store_true', help='Simulated radio network below the NAS (replaces RRC/L1; experimental)')
     parser.add_argument('--sd', type=Path, help='microSD image inserted in the phone (the card controller is not emulated yet)')
     parser.add_argument('--sim', help='SIM profile name (see sim_profile.py); its writes are persisted')
@@ -578,7 +587,7 @@ if __name__ == '__main__':
                  args.synthetic_ssikyu, args.mdsp_management, args.keypad,
                  None if args.flip is None else args.flip == 'open',
                  [tuple(int(v) for v in item.split(',')) for item in args.press],
-                 args.keys_file, args.live_dir, args.nand_from_checkpoint, args.uim_card, args.release_keys, args.fast, args.realtime, args.cpu_mhz, args.audio, args.imei, args.bt_addr, args.save_nand, args.save_nand_after, args.rf_defaults, args.netsim)
+                 args.keys_file, args.live_dir, args.nand_from_checkpoint, args.uim_card, args.release_keys, args.fast, args.realtime, args.cpu_mhz, args.audio, args.imei, args.bt_addr, args.save_nand, args.save_nand_after, args.rf_defaults, args.netsim, None, None, args.rssi, args.signal_file, args.headset_file)
     suffix = '_nand' if args.nand or args.nand_image else ''
     suffix += '_lcd' if args.lcd_bus else ''
     suffix += '_banks' if args.register_banks else ''

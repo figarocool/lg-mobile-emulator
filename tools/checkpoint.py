@@ -37,7 +37,7 @@ def save(path, uc, config, controller, panel, pages, instructions, timer=None, m
             metadata['timer'] = {key: getattr(timer, key) for key in
                 ['cycles', 'deadline', 'period', 'pending', 'raised', 'delivered', 'acks', 'fast_forwards', 'inflight', 'peripheral_pending', 'delivered_sources']}
         if mmc:
-            metadata['mmc'] = {key: getattr(mmc, key) for key in ['stopped', 'starts', 'stops']}
+            metadata['mmc'] = mmc.snapshot() if hasattr(mmc, 'snapshot') else {key: getattr(mmc, key) for key in ['stopped', 'starts', 'stops']}
         if mdsp:
             metadata['mdsp_management'] = {key: getattr(mdsp, key) for key in
                 ['doorbell', 'reset_seen', 'boot_pending', 'boot_replies']}
@@ -121,8 +121,11 @@ def restore(path, uc, config, controller, panel, install_shadow, timer=None, mmc
                 timer.initialize_after_restore()
         if mmc:
             if 'mmc' in metadata:
-                for key, value in metadata['mmc'].items():
-                    setattr(mmc, key, value)
+                if hasattr(mmc, 'restore'):
+                    mmc.restore(metadata['mmc'])
+                else:
+                    for key, value in metadata['mmc'].items():
+                        setattr(mmc, key, value)
             else:
                 mmc.stopped = int.from_bytes(uc.mem_read(mmc.BASE, 4), 'little') == 1
         if mdsp:

@@ -7,7 +7,8 @@ Register map recovered from the original driver (mmc_init_real and the sector re
   +0x10 control: writing it sends the command (0x40: no response, 1: R1, 3: R3, 5: R1 + data read ...)
   +0x34 response FIFO, 16 bits per read, first byte (the command index) in the high half
   +0x38 data FIFO,     16 bits per access, first byte in the high half
-Status bits used by the driver: 0x100 clock running, 0x2000 command done, 0x80 data FIFO ready, bits 5:0 errors.
+Status bits used by the driver: 0x100 clock running, 0x2000 command done, 0x80 data FIFO ready (read), 0x40 FIFO ready for data
+(write, mmc_write_i at 0x3680c4), 0x800 + 0x1000 block written (mmc_write_i waits for both, at 0x368276), bits 5:0 errors.
 Without a card the model is the plain clock model (mmc_clock.MmcClock): commands never complete and the driver
 gives up, exactly as on a phone with no card inserted.
 """
@@ -18,6 +19,7 @@ from mmc_card import BLOCK
 
 STATUS, CLEAR, COMMAND, ARG_HIGH, ARG_LOW, CONTROL, RESPONSE, DATA = 0x04, 0x14, 0x28, 0x2c, 0x30, 0x10, 0x34, 0x38
 DONE, FIFO_READY, TIMEOUT, CLOCK = 0x2000, 0x80, 0x04, 0x100
+TX_READY, WRITE_DONE = 0x40, 0x1800   # write path: ready for the next word (bit 6); block received and programmed (bits 11 and 12)
 DETECT = 0x8400016c          # GPIO input word: bit 3 is the card-detect switch read by mmc_exist() at 0x36670c
 DETECT_BIT = 1 << 3
 
@@ -94,7 +96,7 @@ class MmcController(MmcClock):
     def send_command(self, control):
         index = self.registers.get(COMMAND, 0) & 0x3f
         argument = (self.registers.get(ARG_HIGH, 0) << 16) | self.registers.get(ARG_LOW, 0)
-        status = self.status() & ~(DONE | FIFO_READY | 0x3f)
+        status = self.status() & ~(DONE | FIFO_READY | TX_READY | WRITE_DONE | 0x3f)
         self.words_by_command.append(self.words_read)
         self.words_read = 0
         self.trace = []
@@ -120,11 +122,11 @@ class MmcController(MmcClock):
     def read(self, uc, access, address, size, value, _):
         offset = address - self.BASE
         if offset == STATUS:
-            status = self.status() & ~FIFO_READY
+            status = self.status() & ~(FIFO_READY | TX_READY)
             if self.data_out:
                 status |= FIFO_READY
             elif self.pending and self.pending[0] == 'write':
-                status |= FIFO_READY                # room for the next word to send
+                status |= FIFO_READY | TX_READY     # room for the next word to send
             self.set_status(status)
             self.trace.append(('S', hex(status), len(self.data_out)))
             if len(self.status_log) < 400:
@@ -150,10 +152,35 @@ class MmcController(MmcClock):
         self.data_in += bytes([word >> 8, word & 0xff])
         if len(self.data_in) >= BLOCK:
             self.card.write_block(bytes(self.data_in[:BLOCK]))
+            self.set_status(self.status() | WRITE_DONE)
             self.data_in = bytearray(self.data_in[BLOCK:])
             self.blocks_left -= 1
             if not self.pending[1] or self.blocks_left <= 0:
                 self.card.finish_transfer()
+
+    def snapshot(self):
+        card = self.card
+        return {'stopped': self.stopped, 'starts': self.starts, 'stops': self.stops,
+                'registers': {str(k): v for k, v in self.registers.items()},
+                'response': self.response, 'data_out': self.data_out, 'data_in': bytes(self.data_in).hex(),
+                'pending': list(self.pending) if self.pending else None, 'blocks_left': self.blocks_left,
+                'card': None if card is None else {k: getattr(card, k, None) for k in (
+                    'state', 'app_command', 'block_length', 'rca', 'initialised', 'reads', 'writes',
+                    'read_position', 'write_position')}}
+
+    def restore(self, saved):
+        self.stopped, self.starts, self.stops = saved['stopped'], saved['starts'], saved['stops']
+        if 'registers' not in saved:
+            return
+        self.registers = {int(k): v for k, v in saved['registers'].items()}
+        self.response, self.data_out = list(saved['response']), list(saved['data_out'])
+        self.data_in = bytearray.fromhex(saved['data_in'])
+        self.pending = tuple(saved['pending']) if saved['pending'] else None
+        self.blocks_left = saved['blocks_left']
+        if self.card and saved.get('card'):
+            for key, value in saved['card'].items():
+                if value is not None:
+                    setattr(self.card, key, value)
 
     def report(self):
         data = super().report()

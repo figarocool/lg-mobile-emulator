@@ -28,7 +28,7 @@ def call(uc, function, args=(), limit=2_000_000, thumb=True):
         start = function | 1 if thumb else function
         uc.emu_start(start, STUB, count=limit)
         if uc.reg_read(UC_ARM_REG_PC) & ~1 != STUB:
-            raise GuestCallError(f'function 0x{function:x} did not return within {limit} instructions')
+            raise GuestCallError(f'function 0x{function:x} did not return within {limit} instructions (pc=0x{uc.reg_read(UC_ARM_REG_PC):x} lr=0x{uc.reg_read(UC_ARM_REG_LR):x})')
         return uc.reg_read(UC_ARM_REG_R0)
     finally:
         uc.context_restore(saved)
