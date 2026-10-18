@@ -12,6 +12,7 @@ import struct
 
 
 class NativeFsCalls:
+    KIND = 'native_fs_import'
     NAME = 0x04f00000
     RESPONSE = 0x04f00100
     PARAMETERS = 0x04f00200
@@ -19,14 +20,20 @@ class NativeFsCalls:
     BUFFER = 0x04000000
     STOP = 'debugger: native filesystem API returned'
 
-    def __init__(self, requests):
+    API = dict(open=0x161ebcd, read=0x161ec6d, write=0x161ecb7,
+               close=0x161ec2f, test=0x161f2a5, mkdir=0x161f21d,
+               nv_read=0x10d219b, nv_write=0x10d219b)
+
+    def __init__(self, requests, *, api=None, current_tcb=0x19a3f18):
         self.requests = requests
         self.calls = 0
+        self.api = self.API if api is None else api
+        self.current_tcb = current_tcb
 
     def setup(self, uc, state):
         self.uc = uc
         self.context = uc.context_save()
-        self.tcb = bytes(uc.mem_read(0x19a3f18, 4))
+        self.tcb = bytes(uc.mem_read(self.current_tcb, 4))
         def returned(u, address, size, _):
             state['stop'] = self.STOP
             u.emu_stop()
@@ -56,7 +63,7 @@ class NativeFsCalls:
             u.reg_write(UC_ARM_REG_R1, 0 if op == 'create' else 2)
             u.reg_write(UC_ARM_REG_R2, self.PARAMETERS)
             u.reg_write(UC_ARM_REG_R3, 0)
-            pc = 0x161ebcd
+            pc = self.api['open']
             if op in ('read', 'write'):
                 data = request['data'] if op == 'write' else b'\xcc'*request['length']
                 if len(data) > 0x00d00000:
@@ -65,19 +72,19 @@ class NativeFsCalls:
                 u.reg_write(UC_ARM_REG_R0, request['handle'])
                 u.reg_write(UC_ARM_REG_R1, self.BUFFER)
                 u.reg_write(UC_ARM_REG_R2, len(data))
-                pc = 0x161ec6d if op == 'read' else 0x161ecb7
+                pc = self.api[op]
         elif op == 'close':
             u.reg_write(UC_ARM_REG_R0, request['handle'])
             u.reg_write(UC_ARM_REG_R1, 0)
             u.reg_write(UC_ARM_REG_R2, self.RESPONSE)
-            pc = 0x161ec2f
+            pc = self.api[op]
         elif op == 'test':
             u.reg_write(UC_ARM_REG_R1, request.get('kind', 1))
-            pc = 0x161f2a5
+            pc = self.api[op]
         elif op == 'mkdir':
             u.reg_write(UC_ARM_REG_R1, 0)
             u.reg_write(UC_ARM_REG_R2, self.RESPONSE)
-            pc = 0x161f21d
+            pc = self.api[op]
         elif op in ('nv_read', 'nv_write'):
             u.mem_write(self.RESPONSE, b'\x00'*32)
             data = request.get('data', b'')
@@ -86,7 +93,7 @@ class NativeFsCalls:
             u.mem_write(self.BUFFER, data.ljust(128, b'\x00'))
             u.mem_write(self.RESPONSE+4, struct.pack('<HHI', request['item'], int(op == 'nv_write'), self.BUFFER))
             u.reg_write(UC_ARM_REG_R0, self.RESPONSE)
-            pc = 0x10d219b
+            pc = self.api[op]
         else:
             raise ValueError(f'Unsupported native operation: {op}')
         u.reg_write(UC_ARM_REG_PC, pc)
@@ -94,7 +101,7 @@ class NativeFsCalls:
     def finish(self, uc, state):
         if state['stop'] != self.STOP:
             raise ValueError(f'Native request did not finish: {state["stop"]}, PC={uc.reg_read(UC_ARM_REG_PC):x}')
-        if bytes(uc.mem_read(0x19a3f18, 4)) != self.tcb:
+        if bytes(uc.mem_read(self.current_tcb, 4)) != self.tcb:
             raise ValueError('Native request returned in a different task')
         raw = bytes(uc.mem_read(self.RESPONSE, 32))
         result = {'status': raw[0], 'present': raw[1],

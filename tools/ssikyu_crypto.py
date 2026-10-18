@@ -13,13 +13,18 @@ class CryptoProbe:
     OUTPUT = INPUT + 0x1000
     RETURN = INPUT + 0x2000
 
-    def __init__(self):
+    def __init__(self, amss=None, load_address=0x5c000,
+                 decrypt_address=0x706f4, encrypt_address=0x70732):
         self.uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         self.uc.ctl_set_cpu_model(UC_CPU_ARM_926)
         self.uc.mem_map(0, 0x04000000)
         self.uc.mem_map(self.INPUT, 0x100000)
-        self.firmware = next((ROOT/'firmware').glob('*CODE*')).read_bytes()
-        self.uc.mem_write(0x5c000, self.firmware[0x24000:])
+        self.decrypt_address = decrypt_address
+        self.encrypt_address = encrypt_address
+        if amss is None:
+            self.firmware = next((ROOT/'firmware').glob('*CODE*')).read_bytes()
+            amss = self.firmware[0x24000:]
+        self.uc.mem_write(load_address, amss)
 
     def transform(self, data, encrypt=False):
         if len(data) != 512:
@@ -31,7 +36,7 @@ class CryptoProbe:
         u.mem_write(self.INPUT, data)
         u.reg_write(UC_ARM_REG_R0, self.INPUT)
         u.reg_write(UC_ARM_REG_R1, self.OUTPUT)
-        function = 0x70732 if encrypt else 0x706f4
+        function = self.encrypt_address if encrypt else self.decrypt_address
         u.emu_start(function|1, self.RETURN, count=2000000)
         if u.reg_read(UC_ARM_REG_PC) != self.RETURN:
             raise RuntimeError(f'Crypto routine did not return: PC=0x{u.reg_read(UC_ARM_REG_PC):x}')

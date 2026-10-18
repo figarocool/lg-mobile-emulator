@@ -9,14 +9,16 @@ MAGIC = [
     (0xc5b0bdc3,0xc4f6bdba),
 ]
 
-def initialize(controller):
+def initialize(controller, *, probe=None, block=27):
     if not controller.synthetic:
         raise ValueError('Synthetic SSIKYU metadata is only allowed on a synthetic NAND')
-    begin = 27 * controller.BLOCK
+    if not 0 <= block < controller.SIZE // controller.BLOCK:
+        raise ValueError('Invalid synthetic SSIKYU block')
+    begin = block * controller.BLOCK
     length = len(MAGIC) * controller.PAGE
     if controller.storage[begin:begin+length] != b'\xff' * length:
         raise ValueError('SSIKYU candidate pages are not erased; refusing to replace them')
-    probe = CryptoProbe()
+    probe = probe if probe is not None else CryptoProbe()
     encrypted = bytearray()
     for a, b in MAGIC:
         plain = bytearray(512)
@@ -26,8 +28,28 @@ def initialize(controller):
         encrypted.extend(cipher)
     controller.storage[begin:begin+length] = encrypted
     controller.factory_fixture = {
-        'kind': 'synthetic empty SSIKYU metadata', 'block': 27, 'pages': len(MAGIC),
+        'kind': 'synthetic empty SSIKYU metadata', 'block': block, 'pages': len(MAGIC),
         'source': 'factory fallback templates and original page encryption routine',
         'original_phone_nv_data_recovered': False,
     }
     return controller.factory_fixture
+
+
+def initialize_country(controller, country, *, probe, block):
+    """Optional factory country header, only in explicitly synthetic NAND."""
+    if not controller.synthetic or not 0 <= country <= 0xffff:
+        raise ValueError('Country fixture requires synthetic NAND and a 16-bit country')
+    if not 0 <= block < controller.SIZE // controller.BLOCK:
+        raise ValueError('Country block outside synthetic NAND')
+    offset = block * controller.BLOCK
+    if controller.storage[offset:offset+512] != b'\xff'*512:
+        raise ValueError('Country page is not erased')
+    plain = bytearray(512)
+    struct.pack_into('<IIIIH', plain, 0, 0xc7c3b7ba, 0xbdbab3c4, 1, 1, country)
+    encrypted = probe.transform(bytes(plain), encrypt=True)
+    if probe.transform(encrypted) != plain:
+        raise ValueError('Country fixture encryption roundtrip failed')
+    controller.storage[offset:offset+512] = encrypted
+    return dict(kind='synthetic factory country header', block=block,
+                source='original MEDIA Flex.ini', country=country,
+                original_phone_nv_restored=False)

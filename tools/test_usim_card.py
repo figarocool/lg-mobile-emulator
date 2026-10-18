@@ -55,6 +55,22 @@ class CardTests(unittest.TestCase):
         resp = apdu(self.card, bytes.fromhex('00b0000009'))
         self.assertEqual(resp[1:-2], imsi_bytes('222990000000001'))
 
+    def test_read_imsi_le_zero_reports_exact_length_before_retry(self):
+        self.card.strict_read_length = True
+        apdu(self.card, bytes([0, 0xa4, 4, 4, len(USIM_AID)]), USIM_AID)
+        apdu(self.card, bytes.fromhex('00a4000402'), bytes.fromhex('6f07'))
+        self.assertEqual(apdu(self.card, bytes.fromhex('00b0000000')), bytes.fromhex('6c09'))
+        self.assertEqual(apdu(self.card, bytes.fromhex('00b0000009')),
+                         b'\xb0'+imsi_bytes('222990000000001')+b'\x90\x00')
+
+    def test_absolute_ef_select_sets_parent_for_following_relative_select(self):
+        out=apdu(self.card,bytes.fromhex('00a4080404'),bytes.fromhex('7fff6fad'))
+        self.assertEqual(out[0],0x61)
+        self.assertEqual(self.card.current_df.fid,0x7fff)
+        out=apdu(self.card,bytes.fromhex('00a4000402'),bytes.fromhex('6f07'))
+        self.assertEqual(out[0],0x61)
+        self.assertEqual(apdu(self.card,bytes.fromhex('00b0000009'))[1:-2],imsi_bytes('222990000000001'))
+
     def test_unknown_file_is_6a82_and_unknown_instruction_6d00(self):
         out = apdu(self.card, bytes.fromhex('00a4000402'), bytes.fromhex('1234'))
         self.assertEqual(out, bytes([0x6a, 0x82]))

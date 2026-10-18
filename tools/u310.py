@@ -22,7 +22,16 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     install = sub.add_parser('install', help='Installa il telefono dai file originali del firmware')
     install.add_argument('source', type=Path)
+    install.add_argument('--profile',choices=('u310-v10a-h3g','u880-v10b-h3g'),default='u310-v10a-h3g')
+    install.add_argument('--key-file',type=Path,help='Chiave locale per CODE U880 cifrato / Local encrypted CODE key')
+    prepare = sub.add_parser('prepare-profile', help='Prepara firmware riconosciuti in un profilo isolato')
+    prepare.add_argument('source', type=Path)
+    prepare.add_argument('--instance-dir', type=Path, help='Directory istanza; per default instances/<profilo>')
+    sub.add_parser('profiles', help='Elenca i profili firmware isolati preparati')
     run = sub.add_parser('run', help='Accende il telefono')
+    from firmware_profiles import PROFILES
+    run.add_argument('--profile', choices=PROFILES, default='u310-v10a-h3g',
+                     help='U310/U880 V10b: finestra; opzioni AMSS esplicite: terminale')
     run.add_argument('extra', nargs=argparse.REMAINDER, help='Opzioni passate alla finestra (--pin, --flip-closed, ...)')
     sub.add_parser('reset', help='Ripristina lo stato di fabbrica')
     sub.add_parser('uninstall', help='Elimina flash, risorse e copie del firmware')
@@ -36,7 +45,31 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == 'install':
-            provision.install(args.source)
+            if args.profile=='u880-v10b-h3g':
+                import provision_u880
+                provision_u880.install(args.source,args.key_file)
+            else:
+                if args.key_file:raise ValueError('--key-file is only for U880')
+                provision.install(args.source)
+        elif args.command == 'prepare-profile':
+            import prepare_firmware_profile
+            print(json.dumps(prepare_firmware_profile.prepare(args.source, args.instance_dir), indent=2))
+        elif args.command == 'profiles':
+            root = Path(__file__).resolve().parents[1] / 'instances'
+            profiles = []
+            if provision.installed():
+                profiles.append({
+                    'profile_id': 'u310-v10a-h3g',
+                    'model': 'LG U310',
+                    'version': 'V10a H3G',
+                    'instance_dir': str(provision.ROOT),
+                    'status': 'installed',
+                    'bootable': True,
+                })
+            if root.exists():
+                for manifest in sorted(root.glob('*/profile.json')):
+                    profiles.append(json.loads(manifest.read_text()))
+            print(json.dumps(profiles, indent=2))
         elif args.command == 'reset':
             provision.reset()
         elif args.command == 'uninstall':
@@ -69,8 +102,15 @@ def main(argv=None):
             if info.exists():
                 print(json.dumps(json.loads(info.read_text()), indent=2))
         elif args.command == 'run':
+            if args.profile == 'u880-v10b-h3g' and not args.extra:
+                return subprocess.call([sys.executable, str(TOOLS / 'u880_window.py')])
+            if args.profile != 'u310-v10a-h3g':
+                print('U880: avvio AMSS sperimentale da terminale; menu interattivo non ancora disponibile.', flush=True)
+                extra = args.extra[1:] if args.extra[:1] == ['--'] else args.extra
+                return subprocess.call([sys.executable, str(TOOLS / 'emulator.py'),
+                                        '--profile', args.profile, '--target', 'amss', *extra])
             return subprocess.call([sys.executable, str(TOOLS / 'window.py'), *args.extra])
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         print(f'Errore: {exc}', file=sys.stderr)
         return 1
     return 0

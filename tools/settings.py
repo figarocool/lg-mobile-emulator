@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 
 PATH = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'u310-emulator' / 'settings.json'
-DEFAULTS = {'imei': '356938035643809', 'bt_addr': '00:1B:DC:0F:A3:5E', 'pin': False, 'cpu_mhz': 45.0, 'sim': 'H3G Italia', 'sd_image': '', 'signal': 'Ottimo'}
+DEFAULTS = {'imei': '356938035643809', 'bt_addr': '00:1B:DC:0F:A3:5E', 'pin': False, 'cpu_mhz': 45.0, 'sim': 'H3G Italia', 'sd_image': '', 'signal': 'Ottimo',
+            'camera_source': 'test'}
 
 
 def load(path=PATH):

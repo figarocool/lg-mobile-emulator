@@ -4,7 +4,7 @@ from unicorn.arm_const import UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_AR
 
 ENTRY = 0x0161e028
 
-def attach(uc, state):
+def attach(uc, state, entry=ENTRY):
     def string(address):
         data = bytearray()
         for offset in range(256):
@@ -24,4 +24,4 @@ def attach(uc, state):
                                 'message_candidate': string(args[2])}
         state['stop'] = 'debugger breakpoint at firmware fatal/assert entry'
         u.emu_stop()
-    uc.hook_add(UC_HOOK_CODE, hook, begin=ENTRY, end=ENTRY)
+    uc.hook_add(UC_HOOK_CODE, hook, begin=entry, end=entry)

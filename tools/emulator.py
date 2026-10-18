@@ -1,4 +1,4 @@
-"""Experimental U310 ARM926 harness with inferred NAND subset and LCD bus capture."""
+"""ARM926 emulator: U310 handset and experimental U880 decoded AMSS startup."""
 import argparse
 import json
 import os
@@ -49,7 +49,27 @@ def write_nand_state(path, controller):
 
 def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, lcd=False,
         banks=False, save_checkpoint=None, resume=None, irq=False, mmc=False, block_trace=False,
-        synthetic_ssikyu=False, mdsp_management=False, keypad=False, flip=None, press=(), keys_file=None, live_dir=None, nand_checkpoint=None, uim_card=False, release_keys=False, fast=False, realtime=False, cpu_mhz=None, audio=False, imei=None, bt_addr=None, save_nand=None, save_nand_after=0, rf_defaults=False, netsim=False, debug_setup=None, debug_finish=None, rssi=65, signal_file=None, headset_file=None):
+        synthetic_ssikyu=False, mdsp_management=False, keypad=False, flip=None, press=(), keys_file=None, live_dir=None, nand_checkpoint=None, uim_card=False, release_keys=False, fast=False, realtime=False, cpu_mhz=None, audio=False, bluetooth=False, imei=None, bt_addr=None, save_nand=None, save_nand_after=0, rf_defaults=False, netsim=False, debug_setup=None, debug_finish=None, rssi=65, signal_file=None, headset_file=None, nes_keys_file=None,
+        profile='u310-v10a-h3g', instance=None, key_file=None, zero_ram=False):
+    if profile != 'u310-v10a-h3g':
+        import inspect
+        from handset_runtime import run_u880
+        options = locals().copy()
+        supported = {'target', 'shadow', 'limit', 'profile', 'instance', 'key_file', 'zero_ram', 'block_trace', 'banks',
+                     'nand', 'nand_image', 'lcd', 'live_dir', 'mmc', 'synthetic_ssikyu',
+                     'keypad', 'keys_file', 'press', 'irq'}
+        unsupported = [name for name, parameter in inspect.signature(run).parameters.items()
+                       if name not in supported and options[name] != parameter.default
+                       and not (name == 'press' and not options[name])]
+        if target != 'amss' or unsupported:
+            raise ValueError('U880 richiede --target amss; opzioni U310 non disponibili: '
+                             + ', '.join(unsupported))
+        return run_u880(profile, instance=instance, key_file=key_file, limit=limit,
+                        shadow=shadow, zero_ram=zero_ram, block_trace=block_trace, banks=banks,
+                        nand=nand, nand_image=nand_image, lcd=lcd, live_dir=live_dir, mmc=mmc,
+                        synthetic_ssikyu=synthetic_ssikyu, keypad=keypad, keys_file=keys_file, press=press, irq=irq)
+    if instance is not None or key_file is not None or zero_ram:
+        raise ValueError('--instance, --key-file e --zero-ram sono opzioni U880')
     uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     uc.ctl_set_cpu_model(UC_CPU_ARM_926)
     if target == 'amss':
@@ -107,6 +127,8 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
             raise ValueError('MDSP management requires AMSS, register banks and timer IRQ')
         from mdsp_management import MdspManagement
         dsp_management = MdspManagement(uc, timer, qdsp=audio)
+        if dsp_management.qdsp and panel:
+            dsp_management.qdsp.camera.attach_display(panel)     # display DMA (GRP) used by the camera viewfinder
     if target == 'amss':
         data = next((ROOT / 'firmware').glob('*CODE*')).read_bytes()[0x24000:]
         # Candidate relocation delta +0x38000 supported by string references and vectors.
@@ -331,6 +353,15 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
         if audio:
             import audio_hle
             audio_output = audio_hle.attach(uc, state, dsp_management)
+        if bluetooth:
+            if not irq:
+                raise ValueError('Bluetooth requires --timer-irq (its power-on handshake raises an interrupt)')
+            from bluetooth_hc import BluetoothController
+            from bluetooth_peer import VirtualPeer
+            bluetooth_controller = BluetoothController(uc, timer)
+            bluetooth_peer = VirtualPeer(uc)
+            state['bluetooth'] = bluetooth_controller
+            state['bluetooth_peer'] = bluetooth_peer
         import entry_watch
         entry_watch.attach(uc, state)
         import task_coverage
@@ -359,6 +390,8 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
         import importlib
         debug_setup = importlib.import_module(os.environ['U310_SETUP']).setup   # diagnostic hook module
     if debug_setup:
+        state['timer_model'] = timer
+        state['dsp_management'] = dsp_management
         debug_setup(uc, state)
         if resume:
             start = uc.reg_read(UC_ARM_REG_PC) | (1 if uc.reg_read(UC_ARM_REG_CPSR) & 32 else 0)
@@ -401,6 +434,8 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
                 beat_stats[1] = max(beat_stats[1], time.monotonic() - call_start)
         except UcError as exc:
             state['stop'] = str(exc)
+        if audio and target == 'amss':
+            audio_output.poll_nes_apu(uc, state['instructions'] + chunk, nes_keys_file, keys_file)
         if fast and state['stop'] == 'instruction limit':
             # Fast mode: no Python hook per block. Time advances by whole chunks, the idle task
             # waits for the next tick (like a wait-for-interrupt) and delivery happens between chunks.
@@ -443,7 +478,9 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
     if audio and target == 'amss':
         state['audio_report'] = {'tones_started': audio_output.tones_started, 'player': bool(audio_output.process),
                                  'file_requests': audio_output.requests, 'raw_requests': audio_output.raw_requests, 'files_started': audio_output.files.started,
-                                 'files_skipped': audio_output.files.skipped}
+                                 'files_skipped': audio_output.files.skipped, 'midi_notes': audio_output.midi.notes,
+                                 'nes_apu_bridge': hex(audio_output.nes_apu_bridge) if audio_output.nes_apu_bridge else None,
+                                 'nes_apu_frames': audio_output.nes_notes}
         audio_output.close()
     state['pc'] = hex(uc.reg_read(UC_ARM_REG_PC))
     if profile is not None:
@@ -480,6 +517,10 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
             state['camera_i2c'] = dict(bus.report(), sensor_writes=bus.sensor.writes[:80])
         if 'netsim' in state:
             state['netsim'] = state['netsim'].report()
+        if 'bluetooth' in state:
+            state['bluetooth'] = state['bluetooth'].report()
+        if 'bluetooth_peer' in state:
+            state['bluetooth_peer'] = state['bluetooth_peer'].report()
         if 'nv_override' in state:
             state['nv_override'] = state['nv_override'].report()
         if 'access_log' in state:
@@ -539,6 +580,11 @@ def run(target='boot', shadow=False, limit=100000, nand=False, nand_image=None, 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    from firmware_profiles import PROFILES
+    parser.add_argument('--profile', choices=PROFILES, default='u310-v10a-h3g')
+    parser.add_argument('--instance', type=Path, help='Istanza firmware isolata U880')
+    parser.add_argument('--key-file', type=Path, help='Chiave locale U880 (16 byte)')
+    parser.add_argument('--zero-ram', action='store_true', help='U880: RAM inizialmente azzerata (ipotesi)')
     parser.add_argument('--target', choices=['boot', 'code', 'nand-init', 'amss'], default='boot')
     parser.add_argument('--nand', action='store_true', help='Enable inferred NAND controller subset')
     parser.add_argument('--register-banks', action='store_true', help='Diagnostic storage for observed 0x58c/0x50c register banks')
@@ -558,6 +604,7 @@ if __name__ == '__main__':
     parser.add_argument('--realtime', action='store_true', help='With --fast: do not run faster than the emulated clock')
     parser.add_argument('--cpu-mhz', type=float, help='Emulated clock: instructions per emulated second (default 180). Keep it near what the host can execute for real-time pacing')
     parser.add_argument('--audio', action='store_true', help='Render the phone sound service on the host audio device (tones; experimental)')
+    parser.add_argument('--bluetooth', action='store_true', help='Deliver the Bluetooth module boot handshake (power on/off, local profiles; no device discovery yet)')
     parser.add_argument('--imei', help='IMEI served to the firmware (14 digits, or 15 with check digit)')
     parser.add_argument('--bt-addr', help='Bluetooth address served to the firmware (AA:BB:CC:DD:EE:FF)')
     parser.add_argument('--save-nand', type=Path, help='Write the flash contents here when the run ends (also on SIGTERM/SIGINT)')
@@ -566,6 +613,7 @@ if __name__ == '__main__':
     parser.add_argument('--rssi', type=int, default=65, help='Simulated signal strength in -dBm (30 best .. 125 none)')
     parser.add_argument('--signal-file', type=Path, help='File holding the wanted signal strength (-dBm), re-read while running')
     parser.add_argument('--headset-file', type=Path, help='File holding 1 (earphones plugged in) or 0, re-read while running')
+    parser.add_argument('--nes-keys-file', type=Path, help='Live NES controller state (used by the UI emulator)')
     parser.add_argument('--netsim', action='store_true', help='Simulated radio network below the NAS (replaces RRC/L1; experimental)')
     parser.add_argument('--sd', type=Path, help='microSD image inserted in the phone (the card controller is not emulated yet)')
     parser.add_argument('--sim', help='SIM profile name (see sim_profile.py); its writes are persisted')
@@ -579,6 +627,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.limit < 1:
         parser.error('--limit must be positive')
+    if args.profile != 'u310-v10a-h3g' and (args.sim or args.sd):
+        parser.error('--sim e --sd richiedono il modello U310')
     if args.timer_irq and args.target != 'amss':
         parser.error('--timer-irq requires --target amss')
     if args.mmc_clock and not args.shadow_mmio:
@@ -589,13 +639,17 @@ if __name__ == '__main__':
         os.environ['U310_SIM'] = args.sim
     if args.sd:
         os.environ['U310_SD'] = str(args.sd)
-    result = run(args.target, args.shadow_mmio, args.limit, args.nand or args.nand_image is not None,
+    try:
+        result = run(args.target, args.shadow_mmio, args.limit, args.nand or args.nand_image is not None,
                  args.nand_image.read_bytes() if args.nand_image else None, args.lcd_bus,
                  args.register_banks, args.save_checkpoint, args.resume, args.timer_irq, args.mmc_clock, args.block_trace,
                  args.synthetic_ssikyu, args.mdsp_management, args.keypad,
                  None if args.flip is None else args.flip == 'open',
                  [tuple(int(v) for v in item.split(',')) for item in args.press],
-                 args.keys_file, args.live_dir, args.nand_from_checkpoint, args.uim_card, args.release_keys, args.fast, args.realtime, args.cpu_mhz, args.audio, args.imei, args.bt_addr, args.save_nand, args.save_nand_after, args.rf_defaults, args.netsim, None, None, args.rssi, args.signal_file, args.headset_file)
+                 args.keys_file, args.live_dir, args.nand_from_checkpoint, args.uim_card, args.release_keys, args.fast, args.realtime, args.cpu_mhz, args.audio, args.bluetooth, args.imei, args.bt_addr, args.save_nand, args.save_nand_after, args.rf_defaults, args.netsim, None, None, args.rssi, args.signal_file, args.headset_file, args.nes_keys_file,
+                 profile=args.profile, instance=args.instance, key_file=args.key_file, zero_ram=args.zero_ram)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     suffix = '_nand' if args.nand or args.nand_image else ''
     suffix += '_lcd' if args.lcd_bus else ''
     suffix += '_banks' if args.register_banks else ''
@@ -606,7 +660,9 @@ if __name__ == '__main__':
     suffix += '_mdsp_hle' if args.mdsp_management else ''
     suffix += '_keypad' if args.keypad else ''
     out = ROOT / 'analysis' / f'{args.target}_{"shadow" if args.shadow_mmio else "strict"}{suffix}.json'
-    out.parent.mkdir(exist_ok=True)
+    if args.profile != 'u310-v10a-h3g':
+        out = ROOT / 'analysis' / args.profile / ('startup_shadow.json' if args.shadow_mmio else 'startup_strict.json')
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + '\n')
     qualifier = 'estimated ' if args.block_trace else ''
     print(f'{result["instructions"]} {qualifier}instructions; PC={result["pc"]}; stop={result["stop"]}')

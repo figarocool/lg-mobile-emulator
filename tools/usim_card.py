@@ -31,6 +31,7 @@ class EF:
         self.kind = 'EF'
         self.sfi = sfi
         self.arr = arr
+        self.compact_security = False
         if records is not None:
             self.structure = 'cyclic' if cyclic else 'linear'
             self.records = [bytearray(r) for r in records]
@@ -54,7 +55,7 @@ class EF:
         body = (descriptor + bytes([0x83, 0x02, self.fid >> 8, self.fid & 0xff])
                 + bytes([0xa5, 0x03, 0x80, 0x01, 0x71])
                 + bytes([0x8a, 0x01, 0x05])
-                + bytes([0x8b, 0x03, 0x2f, 0x06, self.arr])
+                + (bytes.fromhex('8c03030000') if self.compact_security else bytes([0x8b, 0x03, 0x2f, 0x06, self.arr]))
                 + bytes([0x80, 0x02, self.size >> 8, self.size & 0xff]))
         if self.sfi:
             body += bytes([0x88, 0x01, self.sfi << 3])
@@ -125,6 +126,7 @@ class UsimCard:
     def __init__(self, imsi='222990000000001', pin_prompt=True, pin='0000', profile=None, state_path=None):
         """profile: dict from sim_profile (identity); state_path: JSON file where phone writes are persisted."""
         profile = profile or {}
+        self.strict_read_length = False  # enabled by the experimental U880 transport
         self.imsi = profile.get('imsi', imsi)
         self.pin_prompt = pin_prompt
         DF.pin_enabled = pin_prompt
@@ -134,7 +136,13 @@ class UsimCard:
                                    profile.get('spn', 'H3G'), profile.get('alpha', 'Il mio numero'))
         self.current_df = self.mf
         self.current_ef = None
-        self.parent = {self.mf.fid: None}
+        self.parent = {id(self.mf): None}
+        stack = [self.mf]
+        while stack:
+            parent = stack.pop()
+            for child in parent.children.values():
+                self.parent[id(child)] = parent
+                if isinstance(child, DF):stack.append(child)
         self.pending = bytearray()      # response data waiting for GET RESPONSE
         self.buffer = bytearray()
         self.waiting_data = None        # (header, length) while collecting command data
@@ -335,6 +343,7 @@ class UsimCard:
             self.current_df, self.current_ef = node, None
         else:
             self.current_ef = node
+            self.current_df = self.parent[id(node)]
         fcp = node.fcp()
         if p2 & 0x0c == 0x0c:
             self.pending = bytearray()
@@ -364,6 +373,11 @@ class UsimCard:
         if offset > len(ef.data):
             return 0x6b00, b''
         length = p3 or 256
+        remaining = len(ef.data)-offset
+        if self.strict_read_length and length > remaining:
+            # T=0 cannot signal early SW while the terminal still expects data.
+            # Return the exact available Le so the terminal can retry.
+            return (0x6c00 | remaining, b'') if 0 < remaining < 256 else (0x6282, b'')
         return 0x9000, bytes(ef.data[offset:offset + length])
 
     def read_record(self, p1, p2, p3, data):

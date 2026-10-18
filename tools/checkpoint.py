@@ -24,7 +24,9 @@ def save(path, uc, config, controller, panel, pages, instructions, timer=None, m
             metadata['nand']['unsupported'] = dict(controller.unsupported)
         if panel:
             metadata['lcd'] = {key: getattr(panel, key) for key in
-                ['selected', 'sub_selected', 'registers', 'sub_registers']}
+                ['selected', 'sub_selected', 'registers', 'sub_registers',
+                 'byte_pending', 'byte_mode_writes', 'main_data_count',
+                 'sub_pixel_count', 'sub_pos', 'sub_frames']}
             metadata['lcd']['counts'] = dict(panel.counts)
             metadata['lcd']['events'] = list(panel.events)
             metadata['lcd']['x'] = panel.x

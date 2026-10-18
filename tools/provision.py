@@ -70,6 +70,15 @@ def locate(source, workdir):
         source = target
     if not source.is_dir():
         raise ValueError('Indica la cartella (o lo zip) con i file originali del firmware')
+    import firmware_profiles
+    profile_id, _profile_files, _profile_problems = firmware_profiles.identify(source)
+    if profile_id and not firmware_profiles.PROFILES[profile_id]['bootable']:
+        profile = firmware_profiles.PROFILES[profile_id]
+        raise ValueError(
+            f"Rilevato {profile['model']} {profile['version']}: il CODE non è ancora supportato dal boot emulator. "
+            'Prepara un profilo isolato con `./u310 prepare-profile <cartella firmware>`; '
+            'non sostituire il profilo U310.'
+        )
     import firmware_manifest
     found, problems = firmware_manifest.find(source)
     if problems:

@@ -1,14 +1,20 @@
-# LG Mobile Emulator
+# LG Mobile Emulator — U310 / U880
 
-Emulatore sperimentale del telefono **LG U310** (flip UMTS/GSM, 2006, versione H3G Italia V10a).
-Non reimplementa il telefono a mano: **esegue il firmware originale** (ARM926) con
-[Unicorn](https://www.unicorn-engine.org/) e simula intorno a esso l'hardware: display, tastiera, flash NAND,
-SIM, audio, rete radio. Il progetto nasce dal reverse engineering del firmware: ogni componente emulato è stato
-ricavato osservando cosa il codice originale si aspetta dall'hardware.
+[English](README.en.md) · [Installazione Linux e Windows](docs/INSTALLAZIONE.md)
 
-> **Stato: sperimentale.** Il telefono si avvia da zero fino alla schermata iniziale, mostra i due display,
-> accetta tutti i tasti (finestra e tastiera del PC) e usa SIM, rete e audio simulati. Non è ancora un emulatore
-> completo: vedere "Cosa funziona" e "Cosa manca".
+Emulatore sperimentale ARM926 basato su Unicorn: esegue il firmware originale
+fornito dall'utente e ne mostra l'interfaccia nella finestra GTK.
+
+| Firmware | Stato |
+| --- | --- |
+| U310 H3G V10a | Finestra, SIM/rete simulate, tastiera, audio e salvataggio; periferiche ancora parziali |
+| U880 H3G IT V10b, 8 febbraio 2006 | Avvio con USIM virtuale fino alla schermata principale; navigazione osservata in Messaggi |
+| U880 V10a | Profilo diagnostico sperimentale; non equivale al supporto della finestra V10b |
+
+L'U880 ha display principale/esterno, tastiera e flip simulati, con stato separato
+in `data/u880-v10b/`. Rete radio, chiamate e tutte le applicazioni non sono state
+validate su U880. La visualizzazione dell'operatore della SIM non prova una
+registrazione in rete. Non e un telefono utilizzabile sulla rete reale.
 
 ## Licenza e uso
 
@@ -20,64 +26,54 @@ Testo completo in [`LICENSE`](LICENSE). Autore: **Stefano Basile**, <https://ste
 Il repository **non contiene il firmware** del telefono (né dump, né flash, né immagini): ogni utente deve
 procurarsi i propri file originali.
 
-## Cosa funziona
+## Avvio rapido
 
-- **Avvio completo** del firmware originale AMSS (Qualcomm MSM6250) e dei moduli applicativi, fino alla home H3G.
-- **Display** principale (176x220) e secondario (96x96), flip aperto/chiuso, tastiera con la disposizione reale.
-- **Installazione dai file originali** (`./u310 install`), salvataggio dello stato, ripristino di fabbrica.
-- **SIM simulate** con profili: IMSI, ICCID, numero di telefono (EF_MSISDN), nome operatore, PIN/PUK; le scritture
-  del telefono (rubrica, SMS) restano nel file della SIM.
-- **IMEI e indirizzo Bluetooth** impostabili; il firmware li legge come dalla NV reale.
-- **Audio**: toni dei tasti dal protocollo DSP (comando di generazione toni decifrato) e riproduzione dei file
-  multimediali tramite i decoder del PC.
-- **Rete**: livello radio sostituito da un modello (`netsim`) che risponde al NAS: il telefono si registra su 222-99 (servizio completo),
-  mostra "3G", le tacche (livello regolabile dal menu *Rete*) e il nome operatore "H3G".
-- **microSD**: immagini FAT con tabella delle partizioni, gestore file nella finestra; il controller MMC/SD del
-  telefono è emulato: il driver originale monta la scheda, legge e **scrive** (il telefono crea le cartelle Immagini/Video/Suoni e
-  "Aggiungi nuovo" crea cartelle reali nell'immagine).
-- **Fotocamera**: sensore OV9655 su I2C emulato; il firmware lo rileva, lo inizializza e avvia l'anteprima (fotogrammi ancora da fare).
-- **Finestra GTK** con menu per installare/reinstallare/disinstallare, SIM, microSD e impostazioni.
+Installare prima le dipendenze seguendo la [guida Linux/Windows](docs/INSTALLAZIONE.md).
+Firmware, chiavi, flash e snapshot non sono distribuiti.
 
-## Cosa manca
-
-- Lettura di file multimediali dalla microSD e fotocamera che salva foto (da verificare).
-- Suono di accensione e suonerie in formato SMAF (`.mmf`).
-- Chip Bluetooth (il controller gira sul QDSP, protocollo da ricavare), anteprima e scatto della fotocamera (il sensore OV9655 e il suo
-  bus I2C sono emulati e il driver originale parte; manca il DSP della fotocamera), audio fedele via DSP.
-- Modem GSM/WCDMA reale (oggi sostituito da un modello a livello NAS).
-
-I dettagli tecnici e il diario del reverse engineering sono in [`docs/BOOT_PROGRESS.md`](docs/BOOT_PROGRESS.md)
-e [`docs/ANALISI.md`](docs/ANALISI.md).
-
-## Uso
-
-Requisiti: Python 3, `unicorn`, `capstone`, `numpy` (`python3 -m pip install -r requirements.txt`) e GTK 3 con
-PyGObject dal gestore pacchetti. Facoltativi: `dosfstools` e `mtools` (immagini microSD), `ffmpeg`/`fluidsynth` (audio).
-
-Servono i tre file originali V10a H3G (`U310-CODE-…BIN`, `U310-MEDIA-…bin`, `U310-MODULE-…bin`), riconosciuti dal
-contenuto (SHA-256).
+U310, CODE originale in chiaro piu MEDIA e MODULE:
 
 ```bash
-./u310 install /percorso/cartella-o-zip-del-firmware   # una volta sola, circa 80 secondi
-./u310 run                                              # accende il telefono (finestra)
-./u310 reset | uninstall | reinstall <cartella> | info
-./u310 sd create|format|info|copy-in|copy-out|ls IMMAGINE
+python u310 install "/cartella/firmware-u310"
+python u310 run
 ```
 
-Tastiera PC: cifre, `*` `#`, frecce, Invio=OK, Backspace=C, Esc=BACK, F1/F2=softkey, F3=SEND, F4=END, M=MENU.
+U880 V10b, CODE cifrato piu MEDIA e MODULE originali:
 
-## Struttura
+```bash
+python u310 install "/cartella/firmware-u880" --profile u880-v10b-h3g --key-file "/percorso/chiave-locale.bin"
+python u310 run --profile u880-v10b-h3g
+```
 
-| Percorso | Contenuto |
-| --- | --- |
-| `u310`, `tools/u310.py` | avvio da riga di comando |
-| `tools/emulator.py` | CPU, memoria, hook e opzioni dell'emulazione |
-| `tools/window.py`, `tools/sd_browser.py` | finestra GTK e gestore microSD |
-| `tools/provision.py`, `tools/firmware_manifest.py` | installazione dai file originali |
-| `tools/usim_card.py`, `tools/sim_profile.py` | SIM/USIM e profili |
-| `tools/audio_hle.py`, `tools/qdsp_model.py` | audio e modello del DSP |
-| `tools/netsim.py` | rete simulata sotto il NAS |
-| `tools/mmc_controller.py`, `tools/mmc_card.py`, `tools/sd_card.py` | controller e schede microSD |
-| `tools/test_*.py` | test (`python3 -m unittest discover -s tools -p 'test_*.py'`); alcuni richiedono il firmware installato |
+Con CODE U880 gia decifrato (contenitore con prefisso oppure AMSS grezzo), usare
+lo stesso comando di installazione **senza `--key-file`**. Il riconoscimento avviene
+tramite SHA-256: non accetta automaticamente altre versioni o CODE modificati.
+La chiave del CODE cifrato deve essere un file binario locale di 16 byte.
+L'installatore non ricava chiavi dal telefono e non modifica il firmware originale.
 
-Il resto di `tools/` è strumentazione di analisi usata per ricostruire il comportamento dell'hardware.
+Durante l'installazione U880 vengono verificati e copiati 867 file mediante
+le API filesystem originali nella NAND simulata, poi inizializzato il database UI.
+Il primo avvio puo richiedere alcuni minuti. Chiudere normalmente la finestra
+per salvare; il successivo avvio riprende lo stato. Per ripartire dal reset CPU
+con la flash installata: `python tools/u880_window.py --virtual-sim --cold-boot`.
+
+## Comandi e limiti
+
+Cifre, frecce e Invio funzionano come tastiera del telefono; Esc=BACK,
+F1/F2=softkey, F3=SEND, F4=END, M=MENU. La mappa U880 e sperimentale:
+alcuni tasti e le singole applicazioni richiedono ancora verifiche.
+I tasti brevi vengono mantenuti per il tempo di scansione simulato.
+
+U310 conserva i menu per SIM, microSD e impostazioni; non tutte le periferiche
+sono complete. L'U880 usa una USIM sintetica senza PIN e non condivide i file
+SIM dell'U310. [Dettagli U880](docs/U880.md).
+
+## Distribuzione
+
+`python tools/make_release.py` produce `lg-mobile-emulator.zip` da una lista
+esplicita di file. Contiene codice e documentazione dell'emulatore; nessun
+firmware, chiave, snapshot o programma per il telefono.
+
+I documenti storici [ANALISI](docs/ANALISI.md) e [BOOT_PROGRESS](docs/BOOT_PROGRESS.md)
+descrivono fasi precedenti del reverse engineering; per lo stato corrente usare
+questa pagina e le guide di installazione.

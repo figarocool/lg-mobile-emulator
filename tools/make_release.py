@@ -1,26 +1,33 @@
-"""Build the distributable archive: emulator code and docs only, never firmware, flash images or analysis dumps."""
+"""Package only reviewed emulator files; never recursively include a workspace."""
+import hashlib
+import json
+import re
 import sys
 import zipfile
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-INCLUDE = ['u310', 'README.md', 'requirements.txt', 'LICENSE-NOTE.txt']
-SKIP_PARTS = {'__pycache__'}
-
+ROOT=Path(__file__).resolve().parents[1]
+DENIED_SUFFIXES={'.pxo','.upx','.bin','.img','.nvm','.nv2','.exe','.elf','.o','.zip'}
+DENIED_PARTS={'sdk','firmware','extracted','analysis','data','dumps','instances','references','.git','__pycache__'}
+def release_files():
+    entries=json.loads((ROOT/'tools/release_files.json').read_text())
+    if len(entries)!=len(set(entries)):raise ValueError('Duplicate release entry')
+    result=[]
+    for name in entries:
+        relative=Path(name);path=(ROOT/relative).resolve()
+        if relative.is_absolute() or not path.is_relative_to(ROOT) or (ROOT/relative).is_symlink():raise ValueError('Unsafe release path')
+        if DENIED_PARTS.intersection(relative.parts) or relative.suffix.lower() in DENIED_SUFFIXES:raise ValueError('Private/binary release entry: '+name)
+        if re.search(r'simlock|unlock|z3x|nck',relative.name,re.I):raise ValueError('Excluded tool: '+name)
+        if not path.is_file():raise FileNotFoundError(name)
+        result.append((name,path))
+    return result
 
 def main(output):
-    output = Path(output)
-    files = [ROOT / name for name in INCLUDE if (ROOT / name).exists()]
-    files += sorted(p for p in (ROOT / 'tools').rglob('*') if p.is_file() and not SKIP_PARTS & set(p.parts)
-                    and p.suffix != '.pyc')
-    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for path in files:
-            info = zipfile.ZipInfo.from_file(path, f'u310-emulator/{path.relative_to(ROOT).as_posix()}')
-            if path.name == 'u310':
-                info.external_attr = 0o755 << 16
-            archive.writestr(info, path.read_bytes(), zipfile.ZIP_DEFLATED)
-    print(f'{output}: {len(files)} file, {output.stat().st_size // 1024} KiB')
-
-
-if __name__ == '__main__':
-    main(sys.argv[1] if len(sys.argv) > 1 else ROOT / 'u310-emulator.zip')
+    output=Path(output);files=release_files();manifest=[]
+    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
+        for name,path in files:
+            payload=path.read_bytes();manifest.append(hashlib.sha256(payload).hexdigest()+'  '+name)
+            info=zipfile.ZipInfo('lg-mobile-emulator/'+name);info.external_attr=(0o100755 if name=='u310' else 0o100644)<<16
+            archive.writestr(info,payload,zipfile.ZIP_DEFLATED)
+        archive.writestr('lg-mobile-emulator/MANIFEST.sha256','\n'.join(manifest)+'\n')
+    print(f'{output}: {len(files)} reviewed files, {output.stat().st_size} bytes')
+if __name__=='__main__':main(sys.argv[1] if len(sys.argv)>1 else ROOT/'lg-mobile-emulator.zip')

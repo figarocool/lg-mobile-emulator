@@ -11,3 +11,11 @@ references/
 *.BIN
 *.nvm
 *.nv2
+sdk/
+releases/
+*.pxo
+*.upx
+*.elf
+*.o
+*.exe
+*.pending.zip

@@ -53,9 +53,11 @@ LAYOUT = [
 PC_KEYS = {
     Gdk.KEY_Up: 'UP', Gdk.KEY_Down: 'DOWN', Gdk.KEY_Left: 'LEFT', Gdk.KEY_Right: 'RIGHT',
     Gdk.KEY_Return: 'OK', Gdk.KEY_KP_Enter: 'OK', Gdk.KEY_BackSpace: 'C', Gdk.KEY_Escape: 'BACK',
+    Gdk.KEY_space: 'OK',
     Gdk.KEY_F1: 'SOFT_L', Gdk.KEY_F2: 'SOFT_R', Gdk.KEY_F3: 'SEND', Gdk.KEY_F4: POWER,
     Gdk.KEY_m: 'MENU', Gdk.KEY_Page_Up: 'VOL_UP', Gdk.KEY_Page_Down: 'VOL_DOWN',
     Gdk.KEY_asterisk: '*', Gdk.KEY_numbersign: '#',
+    Gdk.KEY_z: 'NES_A', Gdk.KEY_x: 'NES_B',
 }
 for digit in '0123456789':
     PC_KEYS[getattr(Gdk, 'KEY_' + digit)] = digit
@@ -79,7 +81,7 @@ label.status { color: #dfe3ea; }
 
 
 class EmulatorWindow(Gtk.Window):
-    def __init__(self, resume, flip_open, no_pin=True, cpu_mhz=45.0, scale=None):
+    def __init__(self, resume, flip_open, no_pin=True, cpu_mhz=45.0, scale=None, nand_source=None):
         super().__init__(title='LG U310 — emulatore sperimentale')
         import settings
         self.settings_module = settings
@@ -92,11 +94,17 @@ class EmulatorWindow(Gtk.Window):
         self.work = Path(tempfile.mkdtemp(prefix='u310-'))
         self.keys_file = self.work / 'keys.txt'
         self.keys_file.write_text('')
+        self.nes_keys_file = self.work / 'nes-keys.txt'
+        self.nes_keys_file.write_text('OFF')
         self.signal_file = self.work / 'signal.txt'
         self.headset_file = self.work / 'headset.txt'
         self.headset_file.write_text('0')
         self.held, self.power = set(), False
+        self.nes_controls = False
+        self.nes_held = set()
         self.resume, self.flip_open = resume, flip_open
+        self.nand_image = nand_source or NAND_IMAGE
+        self.custom_nand = nand_source is not None
         self.child, self.closed = None, False
         self.log = open(ROOT / 'analysis/window.log', 'a', buffering=1)
         provider = Gtk.CssProvider()
@@ -145,6 +153,10 @@ class EmulatorWindow(Gtk.Window):
         config.set_can_focus(False)
         config.connect('clicked', self.on_settings)
         bar.pack_start(config, False, False, 0)
+        self.nes_controls_button = Gtk.CheckButton(label='Controlli NES (frecce, Z, X)')
+        self.nes_controls_button.set_can_focus(False)
+        self.nes_controls_button.connect('toggled', self.on_nes_controls)
+        bar.pack_start(self.nes_controls_button, False, False, 0)
         outer.pack_start(bar, False, False, 0)
         self.status = Gtk.Label(label='Accensione in corso…')
         self.status.get_style_context().add_class('status')
@@ -305,6 +317,12 @@ class EmulatorWindow(Gtk.Window):
                          ('Informazioni sulla scheda', self.sd_info)])
         self.signal_levels = {'Nessun segnale': 124, 'Debole': 105, 'Medio': 95, 'Buono': 85, 'Ottimo': 65}
         menu('Rete', [(f'Segnale: {name}', lambda n=name: self.set_signal(n)) for name in self.signal_levels])
+        menu('Fotocamera', [('Pattern di test', lambda: self.set_camera_source('test')),
+                            ('Colore unito…', self.camera_pick_color),
+                            ('Immagine dal PC…', self.camera_pick_image),
+                            ('Webcam del PC', lambda: self.set_camera_source('webcam')),
+                            (None, None),
+                            ('(richiede riavvio del telefono)', lambda: None)])
         menu('Impostazioni', [('IMEI, Bluetooth, velocità…', lambda: self.on_settings(None))])
         return bar
 
@@ -318,6 +336,31 @@ class EmulatorWindow(Gtk.Window):
         self.settings_module.save(self.settings)
         self.signal_file.write_text(str(self.signal_levels[name]))
         self.status.set_text(f'Segnale simulato: {name}')
+
+    def set_camera_source(self, source):
+        """Sorgente dei fotogrammi per la fotocamera emulata: letta una sola volta all'avvio del firmware."""
+        self.settings['camera_source'] = source
+        self.settings_module.save(self.settings)
+        if self.confirm('Cambiare sorgente della fotocamera',
+                        'La fotocamera legge la sorgente solo all’accensione: riavviare il telefono ora?'):
+            self.restart()
+        else:
+            self.status.set_text('Sorgente fotocamera cambiata: sarà attiva al prossimo riavvio')
+
+    def camera_pick_color(self):
+        dialog = Gtk.ColorChooserDialog(title='Colore della fotocamera', transient_for=self)
+        if dialog.run() == Gtk.ResponseType.OK:
+            color = dialog.get_rgba()
+            r, g, b = (round(c * 255) for c in (color.red, color.green, color.blue))
+            dialog.destroy()
+            self.set_camera_source(f'solid:{r},{g},{b}')
+        else:
+            dialog.destroy()
+
+    def camera_pick_image(self):
+        path = self.choose('Immagine per la fotocamera', Gtk.FileChooserAction.OPEN, 'Usa')
+        if path:
+            self.set_camera_source(path)
 
     def message(self, kind, text, detail=''):
         box = Gtk.MessageDialog(transient_for=self, modal=True, message_type=kind, buttons=Gtk.ButtonsType.OK, text=text)
@@ -537,9 +580,9 @@ class EmulatorWindow(Gtk.Window):
         return button
 
     def start(self):
-        if not self.resume and not provision.installed():
+        if not self.resume and not self.custom_nand and not provision.installed():
             return self.install_wizard()
-        if not self.resume and provision.state_outdated():
+        if not self.resume and not self.custom_nand and provision.state_outdated():
             if self.confirm('Il telefono salvato è di una versione precedente',
                             'La rete e la SIM simulate sono cambiate: con la flash salvata il telefono non si registra '
                             '(niente tacche né operatore). Ripristinare lo stato di fabbrica? '
@@ -554,18 +597,19 @@ class EmulatorWindow(Gtk.Window):
             (live / name).unlink(missing_ok=True)
         args = [sys.executable, str(ROOT / 'tools/emulator.py'), '--target', 'amss', '--nand', '--lcd-bus',
                 '--shadow-mmio', '--register-banks', '--timer-irq', '--mmc-clock',
-                '--mdsp-management', '--keypad', '--uim-card', '--fast', '--realtime', '--audio', '--rf-defaults', '--netsim', '--cpu-mhz', str(self.cpu_mhz),
-                '--keys-file', str(self.keys_file), '--live-dir', str(live),
+                '--mdsp-management', '--keypad', '--uim-card', '--fast', '--realtime', '--audio', '--bluetooth', '--rf-defaults', '--netsim', '--cpu-mhz', str(self.cpu_mhz),
+                '--keys-file', str(self.keys_file), '--nes-keys-file', str(self.nes_keys_file), '--live-dir', str(live),
                 '--rssi', str(self.signal_levels.get(self.settings.get('signal'), 65)), '--signal-file', str(self.signal_file), '--headset-file', str(self.headset_file),
-                *(['--resume', str(self.resume)] if self.resume else ['--nand-from-checkpoint', str(NAND_IMAGE)]),
+                *(['--resume', str(self.resume)] if self.resume else ['--nand-from-checkpoint', str(self.nand_image)]),
                 '--imei', self.settings['imei'], '--sim', self.settings['sim'],
                 *(['--sd', self.settings['sd_image']] if self.settings.get('sd_image') and Path(self.settings['sd_image']).exists() else []),
                 '--bt-addr', self.settings['bt_addr'],
-                *([] if self.resume else ['--save-nand', str(NAND_IMAGE), '--save-nand-after', str(BOOT_DONE)]),
+                *([] if self.resume else ['--save-nand', str(self.nand_image), '--save-nand-after', str(BOOT_DONE)]),
                 '--limit', str(10**12)]
         if self.flip_open:
             args += ['--flip', 'open']
-        env = dict(os.environ, U310_PIN='off' if self.no_pin else 'on', U310_HEARTBEAT='30')
+        env = dict(os.environ, U310_PIN='off' if self.no_pin else 'on', U310_HEARTBEAT='30',
+                   U310_CAMERA=self.settings.get('camera_source', 'test'))
         self.child = subprocess.Popen(args, cwd=ROOT, stdout=self.log, stderr=self.log, env=env)
 
     def stop(self):
@@ -586,6 +630,14 @@ class EmulatorWindow(Gtk.Window):
         self.keys_file.write_text(' '.join(items))
 
     def on_key(self, _widget, name, down):
+        if self.nes_controls:
+            virtual = {'UP':'UP','DOWN':'DOWN','LEFT':'LEFT','RIGHT':'RIGHT',
+                       'NES_A':'A','NES_B':'B','2':'UP','8':'DOWN','4':'RIGHT','6':'LEFT',
+                       '3':'A','9':'B','OK':'START','#':'SELECT'}.get(name)
+            if virtual:
+                (self.nes_held.add if down else self.nes_held.discard)(virtual)
+                self.write_nes_keys()
+                return
         if name == POWER:
             self.power = down
         elif name in KEYS:
@@ -594,11 +646,31 @@ class EmulatorWindow(Gtk.Window):
 
     def on_pc_key(self, _window, event, down):
         name = PC_KEYS.get(event.keyval) or PC_KEYS.get(Gdk.keyval_to_lower(event.keyval))
+        if self.nes_controls:
+            name = {'2':'UP','8':'DOWN','4':'RIGHT','6':'LEFT','3':'A','9':'B',
+                    'NES_A':'A','NES_B':'B','OK':'START','#':'SELECT'}.get(name,name)
+            if name in ('UP','DOWN','LEFT','RIGHT','A','B','START','SELECT'):
+                (self.nes_held.add if down else self.nes_held.discard)(name)
+                self.write_nes_keys()
+                return True
+        elif name in ('NES_A', 'NES_B'):
+            name = None
         if name:
             pressed = self.power if name == POWER else KEYS.get(name) in self.held
             if pressed != down:
                 self.on_key(None, name, down)
         return True
+
+    def write_nes_keys(self):
+        if self.nes_controls:
+            self.nes_keys_file.write_text('ON ' + ' '.join(sorted(self.nes_held)))
+        else:
+            self.nes_keys_file.write_text('OFF')
+
+    def on_nes_controls(self, button):
+        self.nes_controls = button.get_active()
+        self.nes_held.clear()
+        self.write_nes_keys()
 
     def show(self, name, image, scale):
         path = self.work / 'live' / name
@@ -632,12 +704,17 @@ class EmulatorWindow(Gtk.Window):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--resume', type=Path, help='Riprende da un checkpoint invece di avviare da zero')
+    parser.add_argument('--nand-from-checkpoint', type=Path, help='Avvia da zero usando una flash separata (salva su questo stesso file)')
     parser.add_argument('--flip-closed', action='store_true', help='Parte con il flip chiuso')
     parser.add_argument('--pin', action='store_true', help='USIM con PIN abilitato (default: PIN disabilitato)')
     parser.add_argument('--cpu-mhz', type=float, default=45.0, help='Clock emulato (istruzioni al secondo emulato). Più alto = fedele ma più lento')
     parser.add_argument('--scale', type=int, help='Ingrandimento del display principale (1-3)')
     args = parser.parse_args()
-    window = EmulatorWindow(args.resume, not args.flip_closed, no_pin=not args.pin, cpu_mhz=args.cpu_mhz, scale=args.scale)
+    if args.resume and args.nand_from_checkpoint:
+        parser.error('--resume e --nand-from-checkpoint sono alternativi')
+    if args.nand_from_checkpoint and not args.nand_from_checkpoint.is_file():
+        parser.error('Il file della flash non esiste')
+    window = EmulatorWindow(args.resume, not args.flip_closed, no_pin=not args.pin, cpu_mhz=args.cpu_mhz, scale=args.scale, nand_source=args.nand_from_checkpoint)
     import signal
     for signum in (signal.SIGTERM, signal.SIGINT):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, window.close)  # spegne il telefono salvando la flash

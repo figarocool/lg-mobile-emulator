@@ -39,9 +39,12 @@ DEFAULT_ATR = FULL_ATR + bytes([tck(_BODY)])  # T=15 is declared, so the ISR exp
 
 
 class UimUart:
-    def __init__(self, uc, timer=None, atr=DEFAULT_ATR):
+    def __init__(self, uc, timer=None, atr=DEFAULT_ATR, atr_poll_pc=ATR_POLL_PC, irq_source=IRQ_SOURCE, atr_on_reset=False):
         self.uc = uc
         self.timer = timer
+        self.atr_poll_pc = atr_poll_pc
+        self.irq_source = irq_source
+        self.atr_on_reset = atr_on_reset
         self.irq_raised = 0
         self.atr = bytes(atr)
         self.rx = deque()
@@ -58,6 +61,10 @@ class UimUart:
         pin_env = os.environ.get('U310_PIN')
         pin_prompt = (pin_env != 'off') if pin_env else bool((profile or {}).get('pin_enabled', True))
         self.card = UsimCard(pin_prompt=pin_prompt, profile=profile, state_path=state)
+        self.card.strict_read_length = atr_on_reset
+        if atr_on_reset:
+            for _, ef in self.card.ef_paths():
+                ef.compact_security = True
         self.tx = bytearray()
         self.log = deque(maxlen=4000)
         self.reads = 0
@@ -78,7 +85,7 @@ class UimUart:
         if access == UC_MEM_READ:
             if address == STATUS:
                 if (self.rx_enabled and not self.delivered
-                        and uc.reg_read(UC_ARM_REG_PC) == ATR_POLL_PC):
+                        and (self.atr_poll_pc is None or uc.reg_read(UC_ARM_REG_PC) == self.atr_poll_pc)):
                     # The driver is waiting for the first ATR byte (poll at 0xb6b410).
                     self.delivered = True
                     self.card.reset()
@@ -115,12 +122,18 @@ class UimUart:
             if value == 0x01:
                 self.rx_enabled = True
                 self.delivered = False  # every card reset is answered with a new ATR
+                if self.atr_on_reset:
+                    self.card.reset()
+                    self.rx.clear()
+                    self.rx.extend(self.atr)
+                    self.delivered = True
+                    self.raise_irq()
             elif value == 0x10:  # reset receiver: flush the FIFO
                 self.rx.clear()
 
     def raise_irq(self):
         if self.timer is not None and self.rx:
-            self.timer.raise_source(IRQ_SOURCE)
+            self.timer.raise_source(self.irq_source)
             self.irq_raised += 1
 
     def snapshot(self):
